@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Webcap",
+  "version": "0.1.0",
+  "description": "Capture DOM elements and page screenshots.",
+  "permissions": ["activeTab", "scripting", "storage", "downloads", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "Webcap"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/custom-action-bar.js", "src/content.js"],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true
+    }
+  ],
+  "web_accessible_resources": []
+}
