@@ -1679,25 +1679,29 @@
         (elementRect.left - parentRect.left);
 
       const getScrollTop = () => (isWindowScroll ? window.scrollY : scrollTarget.scrollTop);
-      const setScrollTop = (value) => {
+      const getScrollLeft = () => (isWindowScroll ? window.scrollX : scrollTarget.scrollLeft);
+
+      const updateScroll = (top, left) => {
         if (isWindowScroll) {
-          window.scrollTo({ top: value, left: window.scrollX, behavior: "auto" });
+          window.scrollTo({ top, left, behavior: "auto" });
         } else {
-          scrollTarget.scrollTop = value;
+          scrollTarget.scrollTop = top;
+          scrollTarget.scrollLeft = left;
         }
       };
+
       const maxScrollTop = isWindowScroll
         ? Math.max(0, Math.max(document.documentElement.scrollHeight, document.body.scrollHeight) - (window.innerHeight || 1))
         : Math.max(0, scrollTarget.scrollHeight - scrollTarget.clientHeight);
 
-      setScrollTop(Math.min(elementTop, maxScrollTop));
-      await this.waitForUiHide();
-      await this.waitForStableRender();
+      const maxScrollLeft = isWindowScroll
+        ? Math.max(0, Math.max(document.documentElement.scrollWidth, document.body.scrollWidth) - (window.innerWidth || 1))
+        : Math.max(0, scrollTarget.scrollWidth - scrollTarget.clientWidth);
 
-      const alignedRect = element.getBoundingClientRect();
-      const totalHeight = Math.max(1, Math.floor(elementHeight * dpr));
-      const totalWidth = Math.max(1, Math.floor(elementWidth * dpr));
+      const totalHeight = Math.max(1, Math.ceil(elementHeight * dpr));
+      const totalWidth = Math.max(1, Math.ceil(elementWidth * dpr));
       const viewportHeight = window.innerHeight || 1;
+      const viewportWidth = window.innerWidth || 1;
 
       const canvas = document.createElement("canvas");
       canvas.width = totalWidth;
@@ -1705,75 +1709,107 @@
       const ctx = canvas.getContext("2d");
       if (!ctx) {
         restoreFixed();
+        restoreAnimations();
         throw new Error("Canvas not available");
       }
       ctx.imageSmoothingEnabled = false;
 
-      let yOffset = 0;
-      let lastOffset = -1;
-      while (yOffset < elementHeight) {
-        const desiredScrollTop = elementTop + yOffset;
-        const nextScrollTop = Math.min(desiredScrollTop, maxScrollTop);
-        setScrollTop(nextScrollTop);
+      try {
+        updateScroll(Math.min(elementTop, maxScrollTop), Math.min(elementLeft, maxScrollLeft));
         await this.waitForUiHide();
         await this.waitForStableRender();
 
-        const currentScrollTop = getScrollTop();
-        const actualOffset = Math.max(0, currentScrollTop - elementTop);
-        if (actualOffset <= lastOffset + 0.5) {
-          break;
-        }
-        lastOffset = actualOffset;
-        yOffset = actualOffset;
+        let yOffset = 0;
+        let lastY = -1;
+        while (yOffset < elementHeight) {
+          const desiredY = elementTop + yOffset;
+          const currentY = Math.min(desiredY, maxScrollTop);
 
-        const currentRect = element.getBoundingClientRect();
-        const capture = await this.requestVisibleCapture();
-        const image = await this.loadImage(capture.dataUrl);
+          let xOffset = 0;
+          let lastX = -1;
+          while (xOffset < elementWidth) {
+            const desiredX = elementLeft + xOffset;
+            const currentX = Math.min(desiredX, maxScrollLeft);
 
-        const sx = Math.max(0, Math.round(currentRect.left * dpr));
-        const sy = Math.max(0, Math.round(Math.max(0, currentRect.top) * dpr));
-        const sw = Math.max(1, Math.round(currentRect.width * dpr));
-        const remaining = elementHeight - yOffset;
-        const maxVisible = Math.max(1, viewportHeight - Math.max(0, currentRect.top));
-        const sliceHeight = Math.min(remaining, maxVisible);
-        const sh = Math.max(1, Math.round(sliceHeight * dpr));
+            updateScroll(currentY, currentX);
+            await this.waitForUiHide();
+            await this.waitForStableRender();
 
-        const dy = Math.max(0, Math.round(yOffset * dpr));
-        const dh = Math.min(sh, totalHeight - dy);
+            const actualYPos = getScrollTop();
+            const actualXPos = getScrollLeft();
+            const actualYOffset = Math.max(0, actualYPos - elementTop);
+            const actualXOffset = Math.max(0, actualXPos - elementLeft);
 
-        ctx.drawImage(
-          image,
-          sx,
-          sy,
-          sw,
-          dh,
-          0,
-          dy,
-          totalWidth,
-          dh
-        );
+            // Infinite loop protection
+            if (actualXOffset <= lastX + 0.1) {
+              break;
+            }
+            lastX = actualXOffset;
 
-        yOffset += sliceHeight;
-      }
+            const currentRect = element.getBoundingClientRect();
+            const capture = await this.requestVisibleCapture();
+            const image = await this.loadImage(capture.dataUrl);
 
-      if (isWindowScroll) {
-        window.scrollTo({ top: originalWindowScroll.y, left: originalWindowScroll.x, behavior: "auto" });
-      } else {
-        scrollTarget.scrollTop = originalTargetScroll.top;
-        scrollTarget.scrollLeft = originalTargetScroll.left;
-      }
-      restoreAnimations();
-      restoreFixed();
+            const sx = Math.max(0, Math.round(currentRect.left * dpr));
+            const sy = Math.max(0, Math.round(Math.max(0, currentRect.top) * dpr));
 
-      return new Promise((resolve, reject) => {
-        canvas.toBlob((blob) => {
-          if (blob) {
-            resolve(blob);
-          } else {
-            reject(new Error("Stitch failed"));
+            const remainingHeight = elementHeight - actualYOffset;
+            const remainingWidth = elementWidth - actualXOffset;
+            const maxVisibleHeight = Math.max(1, viewportHeight - Math.max(0, currentRect.top));
+            const maxVisibleWidth = Math.max(1, viewportWidth - Math.max(0, currentRect.left));
+
+            const sliceHeight = Math.min(remainingHeight, maxVisibleHeight);
+            const sliceWidth = Math.min(remainingWidth, maxVisibleWidth);
+
+            const dw = Math.max(1, Math.round(sliceWidth * dpr));
+            const dh = Math.max(1, Math.round(sliceHeight * dpr));
+            const dx = Math.max(0, Math.round(actualXOffset * dpr));
+            const dy = Math.max(0, Math.round(actualYOffset * dpr));
+
+            ctx.drawImage(image, sx, sy, dw, dh, dx, dy, dw, dh);
+
+            if (actualXOffset + sliceWidth >= elementWidth - 0.5) {
+              break;
+            }
+            xOffset = actualXOffset + sliceWidth;
           }
-        }, "image/png");
-      });
+
+          const actualYPosForLoop = getScrollTop();
+          const actualYOffsetForLoop = Math.max(0, actualYPosForLoop - elementTop);
+          const currentRectForY = element.getBoundingClientRect();
+          const maxVisibleHeightForY = Math.max(1, viewportHeight - Math.max(0, currentRectForY.top));
+          const sliceHeightForY = Math.min(elementHeight - actualYOffsetForLoop, maxVisibleHeightForY);
+
+          if (actualYOffsetForLoop <= lastY + 0.1) {
+            break;
+          }
+          lastY = actualYOffsetForLoop;
+
+          if (actualYOffsetForLoop + sliceHeightForY >= elementHeight - 0.5) {
+            break;
+          }
+          yOffset = actualYOffsetForLoop + sliceHeightForY;
+        }
+
+        return new Promise((resolve, reject) => {
+          canvas.toBlob((blob) => {
+            if (blob) {
+              resolve(blob);
+            } else {
+              reject(new Error("Stitch failed"));
+            }
+          }, "image/png");
+        });
+      } finally {
+        if (isWindowScroll) {
+          window.scrollTo({ top: originalWindowScroll.y, left: originalWindowScroll.x, behavior: "auto" });
+        } else {
+          scrollTarget.scrollTop = originalTargetScroll.top;
+          scrollTarget.scrollLeft = originalTargetScroll.left;
+        }
+        restoreAnimations();
+        restoreFixed();
+      }
     }
 
     hideUiForCapture() {
